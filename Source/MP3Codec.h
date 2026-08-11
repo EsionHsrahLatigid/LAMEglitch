@@ -29,6 +29,16 @@ extern "C" {
 class MP3Codec
 {
 public:
+    struct BufferCapacities
+    {
+        size_t mp3 = 0;
+        size_t mp3Accum = 0;
+        size_t inputLeft = 0;
+        size_t inputRight = 0;
+        size_t outputLeft = 0;
+        size_t outputRight = 0;
+    };
+
     MP3Codec();
     ~MP3Codec();
     
@@ -50,6 +60,7 @@ public:
     // Get latency in samples
     int getLatencySamples() const { return latencySamples; }
     bool getLastDecodeOk() const { return lastDecodeOk.load(std::memory_order_relaxed); }
+    BufferCapacities getBufferCapacities() const;
     
 private:
     void corruptMP3Data(uint8_t* data, int size);
@@ -95,6 +106,8 @@ private:
     
     static constexpr int MP3_FRAME_SAMPLES = 1152;
     static constexpr int MP3_BUFFER_SIZE = 8192;
+    static constexpr int MP3_ACCUM_BUFFER_SIZE = MP3_BUFFER_SIZE * 4;
+    static constexpr int OUTPUT_BUFFER_SIZE = MP3_FRAME_SAMPLES * 16;
 
     float lastWetL = 0.0f;
     float lastWetR = 0.0f;

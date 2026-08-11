@@ -7,6 +7,20 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include <algorithm>
+#include <cmath>
+
+namespace
+{
+float sanitizeAudioSample(float value)
+{
+    if (!std::isfinite(value))
+        return 0.0f;
+
+    return std::clamp(value, -1.0f, 1.0f);
+}
+}
+
 //==============================================================================
 LAMEglitchAudioProcessor::LAMEglitchAudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -77,9 +91,11 @@ void LAMEglitchAudioProcessor::updateParameters()
     float frameRepeat = *frameRepeatParam;
     int bitrate = static_cast<int>(*bitrateParam);
     
-    // Mode: 0 = Real MP3 (if available), 1 = Simulation
-    // Button toggled ON = simulation mode
-    useRealCodec = (*modeParam < 0.5f) && codecAvailable;
+    // The bundled MP3 codec can perform internal work that is not a hard
+    // real-time contract. Keep the user-facing mode parameter, but constrain the
+    // audio callback to deterministic simulation until a worker-thread codec path
+    // exists.
+    useRealCodec = false;
     
     // Always update both codecs so switching modes works
     mp3Codec.setCorruptionAmount(corruption);
@@ -113,6 +129,7 @@ void LAMEglitchAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
 {
     int bitrate = static_cast<int>(*bitrateParam);
     int channels = getTotalNumOutputChannels();
+    channels = std::clamp(channels, 1, 2);
     
     // Try to initialize real MP3 codec
     codecAvailable = mp3Codec.initialize(static_cast<int>(sampleRate), channels, bitrate);
@@ -120,8 +137,10 @@ void LAMEglitchAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
     // Always prepare simulation codec as fallback
     simCodec.prepare(sampleRate, samplesPerBlock);
     
-    // Prepare dry buffer
-    dryBuffer.setSize(channels, samplesPerBlock);
+    // Prepare dry buffer once. processBlock chunks larger host blocks through
+    // this fixed capacity instead of reallocating on the audio thread.
+    dryBufferCapacity = std::max(samplesPerBlock, maxRealtimeBlockSize);
+    dryBuffer.setSize(channels, dryBufferCapacity, false, false, true);
 }
 
 void LAMEglitchAudioProcessor::releaseResources()
@@ -154,45 +173,58 @@ void LAMEglitchAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         return;
     
     updateParameters();
-    
-    // Store dry signal
-    dryBuffer.makeCopyOf(buffer);
-    
-    float* leftChannel = buffer.getWritePointer(0);
-    float* rightChannel = numChannels > 1 ? buffer.getWritePointer(1) : nullptr;
-    
-    if (useRealCodec)
+
+    if (dryBufferCapacity <= 0)
+        return;
+
+    for (int offset = 0; offset < numSamples; offset += dryBufferCapacity)
     {
-        // Use real MP3 encoder/decoder
-        mp3Codec.processWithCorruption(
-            leftChannel,
-            rightChannel ? rightChannel : leftChannel,
-            leftChannel,
-            rightChannel,
-            numSamples
-        );
-        decodeOk.store(mp3Codec.getLastDecodeOk(), std::memory_order_relaxed);
+        const int chunkSamples = std::min(dryBufferCapacity, numSamples - offset);
+        float* leftChannel = buffer.getWritePointer(0) + offset;
+        float* rightChannel = numChannels > 1 ? buffer.getWritePointer(1) + offset : nullptr;
+        processChunk(leftChannel, rightChannel, numChannels, chunkSamples);
     }
-    else
+}
+
+void LAMEglitchAudioProcessor::processChunk(float* leftChannel, float* rightChannel,
+                                            int numChannels, int numSamples)
+{
+    const float rawMix = mixParam != nullptr ? mixParam->load() : 1.0f;
+    const float mix = std::clamp(std::isfinite(rawMix) ? rawMix : 1.0f, 0.0f, 1.0f);
+
+    for (int ch = 0; ch < numChannels; ++ch)
     {
-        // Use simulation
-        simCodec.process(leftChannel, rightChannel, numSamples);
-        decodeOk.store(false, std::memory_order_relaxed);
+        float* input = ch == 0 ? leftChannel : rightChannel;
+        float* dry = dryBuffer.getWritePointer(ch);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            input[i] = sanitizeAudioSample(input[i]);
+            dry[i] = input[i];
+        }
     }
-    
-    // Apply dry/wet mix
-    float mix = *mixParam;
+
+    simCodec.process(leftChannel, rightChannel, numSamples);
+    decodeOk.store(false, std::memory_order_relaxed);
+
     if (mix < 1.0f)
     {
         for (int ch = 0; ch < numChannels; ++ch)
         {
-            float* wet = buffer.getWritePointer(ch);
+            float* wet = ch == 0 ? leftChannel : rightChannel;
             const float* dry = dryBuffer.getReadPointer(ch);
-            
+
             for (int i = 0; i < numSamples; ++i)
-            {
-                wet[i] = dry[i] * (1.0f - mix) + wet[i] * mix;
-            }
+                wet[i] = sanitizeAudioSample(dry[i] * (1.0f - mix) + sanitizeAudioSample(wet[i]) * mix);
+        }
+    }
+    else
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            float* wet = ch == 0 ? leftChannel : rightChannel;
+            for (int i = 0; i < numSamples; ++i)
+                wet[i] = sanitizeAudioSample(wet[i]);
         }
     }
 }

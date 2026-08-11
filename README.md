@@ -2,9 +2,10 @@
 
 Realtime MP3 encode/decode corruption effect for VST3, AU, and Standalone hosts.
 
-LAMEglitch uses the bundled Shine encoder and dr_mp3 decoder to encode incoming
-audio, corrupt MP3 frame bytes, decode the result, and blend it back with the dry
-signal. A simulation path is available when the real codec cannot initialize.
+LAMEglitch contains the bundled Shine encoder and dr_mp3 decoder, but the
+realtime audio callback is constrained to the deterministic simulation path. The
+real codec can allocate internally, so it is kept out of `processBlock` until a
+bounded worker-thread/offline path is implemented.
 
 ## Identity
 
@@ -49,7 +50,7 @@ Staged products are written to:
 | Frame Repeat | Probability of byte/frame repetition artifacts |
 | Bitrate | MP3 bitrate from 32 to 320 kbps |
 | Mix | Dry/wet balance |
-| Mode | Real MP3 path or simulation mode |
+| Mode | User-facing safe simulation selector; realtime processing remains simulation-only |
 
 ## Dependency Licenses
 

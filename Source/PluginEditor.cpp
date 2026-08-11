@@ -68,7 +68,7 @@ LAMEglitchAudioProcessorEditor::LAMEglitchAudioProcessorEditor(LAMEglitchAudioPr
     addAndMakeVisible(mixSlider);
     
     // Mode button - connect to parameter
-    modeButton.setButtonText(p.isCodecAvailable() ? "REAL MP3" : "SIMULATION");
+    modeButton.setButtonText(p.isCodecAvailable() ? "SAFE SIM" : "SIMULATION");
     modeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff333344));
     modeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffff3366));
     modeButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff00ffcc));
@@ -76,7 +76,7 @@ LAMEglitchAudioProcessorEditor::LAMEglitchAudioProcessorEditor(LAMEglitchAudioPr
     modeButton.setClickingTogglesState(true);
     modeButton.onClick = [this]() {
         bool simMode = modeButton.getToggleState();
-        modeButton.setButtonText(simMode ? "SIMULATION" : "REAL MP3");
+        modeButton.setButtonText(simMode ? "SIMULATION" : "SAFE SIM");
         // Update the parameter
         if (auto* param = audioProcessor.getAPVTS().getParameter("mode"))
         {
@@ -92,12 +92,12 @@ LAMEglitchAudioProcessorEditor::LAMEglitchAudioProcessorEditor(LAMEglitchAudioPr
     
     if (p.isCodecAvailable())
     {
-        statusLabel.setText("Shine encoder ready - Real MP3 processing available", 
+        statusLabel.setText("Shine encoder ready - realtime callback uses safe simulation",
                            juce::dontSendNotification);
     }
     else
     {
-        statusLabel.setText("MP3 encoder unavailable - Simulation mode only", 
+        statusLabel.setText("MP3 encoder unavailable - simulation mode only",
                            juce::dontSendNotification);
         statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff6666));
     }
@@ -220,7 +220,7 @@ void LAMEglitchAudioProcessorEditor::paint(juce::Graphics& g)
     // Subtitle
     g.setFont(juce::Font(11.0f));
     g.setColour(juce::Colour(0xff00ffcc));
-    g.drawText("REAL MP3 DATA CORRUPTION", 10, 42, 280, 15, juce::Justification::left);
+    g.drawText("REALTIME-SAFE MP3 CORRUPTION", 10, 42, 280, 15, juce::Justification::left);
     
     // Waveform visualizer area
     juce::Rectangle<float> waveBounds(10.0f, 60.0f, getWidth() - 20.0f, 50.0f);

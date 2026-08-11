@@ -16,6 +16,14 @@
 //==============================================================================
 namespace
 {
+float sanitizeAudioSample(float value)
+{
+    if (!std::isfinite(value))
+        return 0.0f;
+
+    return std::clamp(value, -1.0f, 1.0f);
+}
+
 int findMp3SyncOffset(const uint8_t* data, int size)
 {
     if (size < 2)
@@ -56,7 +64,7 @@ int pickSupportedBitrate(int bitrate, int mpegVersion)
 
 int16_t floatToInt16(float value)
 {
-    float clipped = std::max(-1.0f, std::min(1.0f, value));
+    float clipped = sanitizeAudioSample(value);
     return (int16_t)std::lrintf(clipped * 32767.0f);
 }
 }
@@ -66,11 +74,11 @@ MP3Codec::MP3Codec()
 {
     drmp3dec_init(&mp3Decoder);
     mp3Buffer.resize(MP3_BUFFER_SIZE);
-    outputBufferL.resize(MP3_FRAME_SAMPLES * 16);
-    outputBufferR.resize(MP3_FRAME_SAMPLES * 16);
+    outputBufferL.resize(OUTPUT_BUFFER_SIZE);
+    outputBufferR.resize(OUTPUT_BUFFER_SIZE);
     
     // MP3 accumulation buffer for decoder
-    mp3AccumBuffer.resize(MP3_BUFFER_SIZE * 4);
+    mp3AccumBuffer.resize(MP3_ACCUM_BUFFER_SIZE);
     mp3AccumSize = 0;
 }
 
@@ -115,11 +123,16 @@ bool MP3Codec::initialize(int sampleRate, int channels, int bitrate)
         return false;
     
     samplesPerPass = shine_samples_per_pass(shineEncoder);
+    if (samplesPerPass <= 0 || samplesPerPass > MP3_FRAME_SAMPLES)
+    {
+        shutdown();
+        return false;
+    }
+
     drmp3dec_init(&mp3Decoder);
     
-    inputBufferL16.resize(samplesPerPass);
-    if (currentChannels > 1)
-        inputBufferR16.resize(samplesPerPass);
+    inputBufferL16.resize(MP3_FRAME_SAMPLES);
+    inputBufferR16.resize(MP3_FRAME_SAMPLES);
     std::fill(outputBufferL.begin(), outputBufferL.end(), 0.0f);
     std::fill(outputBufferR.begin(), outputBufferR.end(), 0.0f);
     
@@ -135,6 +148,18 @@ bool MP3Codec::initialize(int sampleRate, int channels, int bitrate)
     
     initialized = true;
     return codecAvailable;
+}
+
+MP3Codec::BufferCapacities MP3Codec::getBufferCapacities() const
+{
+    return {
+        mp3Buffer.capacity(),
+        mp3AccumBuffer.capacity(),
+        inputBufferL16.capacity(),
+        inputBufferR16.capacity(),
+        outputBufferL.capacity(),
+        outputBufferR.capacity()
+    };
 }
 
 void MP3Codec::shutdown()
@@ -193,7 +218,10 @@ bool MP3Codec::processWithCorruption(const float* inputL, const float* inputR,
             if (mp3Bytes > 0 && encoded != nullptr)
             {
                 if (mp3Bytes > static_cast<int>(mp3Buffer.size()))
-                    mp3Buffer.resize(mp3Bytes);
+                {
+                    lastDecodeOk.store(false, std::memory_order_relaxed);
+                    return false;
+                }
                 
                 memcpy(mp3Buffer.data(), encoded, mp3Bytes);
                 if (clampedCorruption > 0.0f)
@@ -450,8 +478,8 @@ void MP3SimulationCodec::process(float* leftChannel, float* rightChannel, int nu
 {
     for (int i = 0; i < numSamples; ++i)
     {
-        float L = leftChannel[i];
-        float R = rightChannel ? rightChannel[i] : L;
+        float L = sanitizeAudioSample(leftChannel[i]);
+        float R = rightChannel ? sanitizeAudioSample(rightChannel[i]) : L;
         
         if (corruptionAmount > 0.001f)
         {
@@ -464,14 +492,14 @@ void MP3SimulationCodec::process(float* leftChannel, float* rightChannel, int nu
             // Random glitch
             if (uniformDist(rng) < corruptionAmount * 0.02f)
             {
-                L = (uniformDist(rng) - 0.5f) * 2.0f;
-                R = (uniformDist(rng) - 0.5f) * 2.0f;
+                L = sanitizeAudioSample((uniformDist(rng) - 0.5f) * 2.0f);
+                R = sanitizeAudioSample((uniformDist(rng) - 0.5f) * 2.0f);
             }
         }
         
-        leftChannel[i] = L;
+        leftChannel[i] = sanitizeAudioSample(L);
         if (rightChannel)
-            rightChannel[i] = R;
+            rightChannel[i] = sanitizeAudioSample(R);
     }
 }
 

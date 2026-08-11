@@ -53,10 +53,12 @@ public:
     
     bool isCodecAvailable() const { return codecAvailable; }
     bool isDecodeOk() const { return decodeOk.load(std::memory_order_relaxed); }
+    bool isUsingRealtimeCodec() const { return useRealCodec; }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateParameters();
+    void processChunk(float* leftChannel, float* rightChannel, int numChannels, int numSamples);
     
     juce::AudioProcessorValueTreeState apvts;
     
@@ -81,6 +83,9 @@ private:
     
     // Dry buffer for mix
     juce::AudioBuffer<float> dryBuffer;
+    int dryBufferCapacity = 0;
+
+    static constexpr int maxRealtimeBlockSize = 8192;
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LAMEglitchAudioProcessor)
