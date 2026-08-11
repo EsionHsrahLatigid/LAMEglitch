@@ -13,6 +13,7 @@ set(LAMEGLITCH_ARTIFACT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts" CACHE PATH
 
 if(LAMEGLITCH_BUILD_PLUGIN)
 include(FetchContent)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
     add_subdirectory(JUCE)
@@ -112,6 +113,9 @@ set(lameglitch_artifact_commands
     COMMAND ${CMAKE_COMMAND} -E remove_directory "${lameglitch_staged_products}/Standalone"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${lameglitch_juce_products}/VST3" "${lameglitch_staged_products}/VST3"
+    COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/NormalizeVst3ModuleInfo.py"
+            "${lameglitch_staged_products}/VST3/LAMEglitch.vst3/Contents/Resources/moduleinfo.json"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${lameglitch_juce_products}/Standalone" "${lameglitch_staged_products}/Standalone")
 
@@ -151,6 +155,14 @@ if(LAMEGLITCH_BUILD_TESTS)
             libs/shine-3.1.1/src/lib
             libs/dr_libs-mp3-0.7.2)
     target_link_libraries(LAMEglitchSmokeTests PRIVATE LAMEglitch juce::juce_audio_utils)
+    add_dependencies(LAMEglitchSmokeTests LAMEglitch_Artifacts)
     add_test(NAME LAMEglitchSmokeTests COMMAND LAMEglitchSmokeTests)
+    add_test(
+        NAME LAMEglitchArtifactChecks
+        COMMAND ${CMAKE_COMMAND}
+                -DLAMEGLITCH_STAGED_DIR=${LAMEGLITCH_ARTIFACT_DIR}/$<CONFIG>
+                -DLAMEGLITCH_EXPECT_AU=$<BOOL:${APPLE}>
+                -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/Tests/VerifyArtifacts.cmake)
 endif()
 endif()
