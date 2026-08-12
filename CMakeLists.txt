@@ -245,6 +245,7 @@ if(LAMEGLITCH_BUILD_TESTS)
     add_test(
         NAME LAMEglitchArtifactChecks
         COMMAND ${CMAKE_COMMAND}
+                -DBUILD_CONFIG=$<CONFIG>
                 -DLAMEGLITCH_STAGED_DIR=${LAMEGLITCH_ARTIFACT_DIR}/$<CONFIG>
                 -DLAMEGLITCH_EXPECT_AU=$<BOOL:${APPLE}>
                 -DPython3_EXECUTABLE=${Python3_EXECUTABLE}

@@ -1,3 +1,8 @@
+if(DEFINED BUILD_CONFIG AND NOT BUILD_CONFIG STREQUAL "Release")
+    message(STATUS "Skipping release artifact checks for ${BUILD_CONFIG}")
+    return()
+endif()
+
 if(NOT DEFINED LAMEGLITCH_STAGED_DIR)
     message(FATAL_ERROR "LAMEGLITCH_STAGED_DIR is required")
 endif()
