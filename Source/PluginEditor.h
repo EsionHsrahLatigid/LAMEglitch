@@ -7,6 +7,8 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <ehl/juce_design/EhlDesign.h>
+
 #include "PluginProcessor.h"
 
 //==============================================================================
@@ -44,6 +46,10 @@ private:
     void timerCallback() override;
     
     LAMEglitchAudioProcessor& audioProcessor;
+    ehl::juce_design::LookAndFeel ehlLookAndFeel;
+    ehl::juce_design::ParameterDisplay parameterDisplay {
+        ehl::juce_design::DisplayKind::bitcrusher
+    };
     
     // Sliders
     CorruptionSlider corruptionSlider;
@@ -54,20 +60,14 @@ private:
     CorruptionSlider mixSlider;
     
     // Mode toggle
-    juce::TextButton modeButton;
+    juce::ToggleButton modeButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> modeAttachment;
     
     // Status display
     juce::Label statusLabel;
     juce::Label decodeStatusLabel;
     
-    // Visualizer
-    std::vector<float> waveformData;
-    std::vector<uint8_t> corruptedBytesViz;
-    int vizPhase = 0;
-    float glitchIntensity = 0.0f;
-    
-    std::mt19937 rng{std::random_device{}()};
+    void updateDisplayAndStatus();
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LAMEglitchAudioProcessorEditor)
 };

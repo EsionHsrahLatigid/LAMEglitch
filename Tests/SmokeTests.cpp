@@ -50,8 +50,20 @@ bool runBlock(LAMEglitchAudioProcessor& processor, int channels, int samples, fl
 
 int main()
 {
+    juce::ScopedJuceInitialiser_GUI initialiseJuce;
     LAMEglitchAudioProcessor processor;
     processor.setNonRealtime(true);
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor(processor.createEditor());
+    if (editor == nullptr
+        || editor->getWidth() != 640
+        || editor->getHeight() != 360
+        || !editor->isResizable())
+    {
+        std::cerr << "LAMEglitch editor did not use the compact resizable EHL layout\n";
+        return 1;
+    }
+
     if (!setParameter(processor.getAPVTS(), "mode", 1.0f)
         || !setParameter(processor.getAPVTS(), "corruption", 1.0f)
         || !setParameter(processor.getAPVTS(), "bitFlip", 1.0f)

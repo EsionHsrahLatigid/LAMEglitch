@@ -1,0 +1,66 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "engine-debug",
+      "displayName": "Engine Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/engine-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LAMEGLITCH_BUILD_PLUGIN": "ON",
+        "LAMEGLITCH_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "plugin-release",
+      "displayName": "Plugin Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/plugin-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "LAMEGLITCH_BUILD_PLUGIN": "ON",
+        "LAMEGLITCH_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "engine-debug",
+      "configurePreset": "engine-debug",
+      "targets": [
+        "LAMEglitchSmokeTests",
+        "LAMEglitchMP3CodecTests",
+        "LAMEglitchRealtimeSafetyTests",
+        "LAMEglitchWorkerTests"
+      ]
+    },
+    {
+      "name": "plugin-release",
+      "configurePreset": "plugin-release",
+      "targets": [
+        "ehl_stage_products",
+        "LAMEglitchSmokeTests",
+        "LAMEglitchMP3CodecTests",
+        "LAMEglitchRealtimeSafetyTests",
+        "LAMEglitchWorkerTests"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "engine-debug",
+      "configurePreset": "engine-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "plugin-release",
+      "configurePreset": "plugin-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
