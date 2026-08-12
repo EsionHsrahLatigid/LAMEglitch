@@ -85,26 +85,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout LAMEglitchAudioProcessor::cr
 
 void LAMEglitchAudioProcessor::updateParameters()
 {
-    float corruption = *corruptionParam;
-    float bitFlip = *bitFlipParam;
-    float byteDrop = *byteDropParam;
-    float frameRepeat = *frameRepeatParam;
-    int bitrate = static_cast<int>(*bitrateParam);
-    
-    // The bundled MP3 codec can perform internal work that is not a hard
-    // real-time contract. Keep the user-facing mode parameter, but constrain the
-    // audio callback to deterministic simulation until a worker-thread codec path
-    // exists.
-    useRealCodec = false;
-    
-    // Always update both codecs so switching modes works
-    mp3Codec.setCorruptionAmount(corruption);
-    mp3Codec.setBitFlipProbability(bitFlip);
-    mp3Codec.setByteDropProbability(byteDrop);
-    mp3Codec.setFrameRepeatProbability(frameRepeat);
-    
+    const float corruption = std::clamp(corruptionParam->load(), 0.0f, 1.0f);
+    const float bitFlip = std::clamp(bitFlipParam->load(), 0.0f, 1.0f);
+    const float byteDrop = std::clamp(byteDropParam->load(), 0.0f, 1.0f);
+    const float frameRepeat = std::clamp(frameRepeatParam->load(), 0.0f, 1.0f);
+    const int bitrate = std::clamp(static_cast<int>(bitrateParam->load()), 8, 320);
+    const bool wantsRealCodec = modeParam->load() < 0.5f;
+
+    workerParameters = { corruption, bitFlip, byteDrop, frameRepeat, bitrate };
+    const bool previousRealRequest = realModeRequested.exchange(wantsRealCodec,
+                                                                std::memory_order_relaxed);
+    if (previousRealRequest != wantsRealCodec && inputFrameFill > 0)
+        inputFrameEligibleForReal = false;
+    useRealCodec.store(wantsRealCodec && realWorker.isCodecAvailable(), std::memory_order_relaxed);
+
     simCodec.setCorruptionAmount(corruption);
-    simCodec.setBitrate(bitrate);
 }
 
 //==============================================================================
@@ -127,26 +122,38 @@ void LAMEglitchAudioProcessor::changeProgramName(int, const juce::String&) {}
 //==============================================================================
 void LAMEglitchAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    int bitrate = static_cast<int>(*bitrateParam);
+    const int bitrate = static_cast<int>(bitrateParam->load());
     int channels = getTotalNumOutputChannels();
     channels = std::clamp(channels, 1, 2);
-    
-    // Try to initialize real MP3 codec
-    codecAvailable = mp3Codec.initialize(static_cast<int>(sampleRate), channels, bitrate);
-    
-    // Always prepare simulation codec as fallback
-    simCodec.prepare(sampleRate, samplesPerBlock);
-    
-    // Prepare dry buffer once. processBlock chunks larger host blocks through
-    // this fixed capacity instead of reallocating on the audio thread.
+
+    realWorker.prepare(static_cast<int>(sampleRate), channels, bitrate);
+    workerFrameSamples = realWorker.getFrameSamples();
+    pipelineLatencySamples = realWorker.getPipelineLatencySamples();
+    totalLatencySamples = pipelineLatencySamples + realWorker.getCodecLatencySamples();
+    setLatencySamples(totalLatencySamples);
+
     dryBufferCapacity = std::max(samplesPerBlock, maxRealtimeBlockSize);
     dryBuffer.setSize(channels, dryBufferCapacity, false, false, true);
+    dryDelayBuffer.setSize(channels, std::max(1, totalLatencySamples), false, true, true);
+    dryDelayBuffer.clear();
+
+    inputFrame.fill(0.0f);
+    inputFrameFill = 0;
+    inputFrameEligibleForReal = false;
+    nextInputFrameSequence = 0;
+    hasPendingOutputFrame = false;
+    hasActiveOutputFrame = false;
+    dryDelayPosition = 0;
+    streamSamplePosition = 0;
+    decodeOk.store(false, std::memory_order_relaxed);
+    updateParameters();
 }
 
 void LAMEglitchAudioProcessor::releaseResources()
 {
-    mp3Codec.shutdown();
-    simCodec.reset();
+    realWorker.release();
+    useRealCodec.store(false, std::memory_order_relaxed);
+    decodeOk.store(false, std::memory_order_relaxed);
 }
 
 bool LAMEglitchAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -192,20 +199,93 @@ void LAMEglitchAudioProcessor::processChunk(float* leftChannel, float* rightChan
     const float rawMix = mixParam != nullptr ? mixParam->load() : 1.0f;
     const float mix = std::clamp(std::isfinite(rawMix) ? rawMix : 1.0f, 0.0f, 1.0f);
 
-    for (int ch = 0; ch < numChannels; ++ch)
-    {
-        float* input = ch == 0 ? leftChannel : rightChannel;
-        float* dry = dryBuffer.getWritePointer(ch);
+    const bool processReal = useRealCodec.load(std::memory_order_relaxed);
 
-        for (int i = 0; i < numSamples; ++i)
+    for (int sample = 0; sample < numSamples; ++sample)
+    {
+        if (inputFrameFill == 0)
+            inputFrameEligibleForReal = realModeRequested.load(std::memory_order_relaxed)
+                                     && realWorker.isCodecAvailable();
+
+        const float inputLeft = sanitizeAudioSample(leftChannel[sample]);
+        const float inputRight = numChannels > 1 ? sanitizeAudioSample(rightChannel[sample]) : inputLeft;
+        leftChannel[sample] = inputLeft;
+        if (rightChannel != nullptr)
+            rightChannel[sample] = inputRight;
+
+        inputFrame[static_cast<std::size_t>(inputFrameFill)] = inputLeft;
+        inputFrame[static_cast<std::size_t>(RealtimeMP3Worker::maxFrameSamples + inputFrameFill)] = inputRight;
+
+        for (int channel = 0; channel < numChannels; ++channel)
         {
-            input[i] = sanitizeAudioSample(input[i]);
-            dry[i] = input[i];
+            const float current = channel == 0 ? inputLeft : inputRight;
+            float delayed = current;
+            if (totalLatencySamples > 0)
+            {
+                delayed = dryDelayBuffer.getSample(channel, dryDelayPosition);
+                dryDelayBuffer.setSample(channel, dryDelayPosition, current);
+            }
+            dryBuffer.setSample(channel, sample, delayed);
         }
+
+        inputFrameFill++;
+        if (inputFrameFill == workerFrameSamples)
+            submitCompletedInputFrame();
+
+        float wetLeft = 0.0f;
+        float wetRight = 0.0f;
+        if (streamSamplePosition >= static_cast<std::uint64_t>(pipelineLatencySamples))
+        {
+            const auto targetSample = streamSamplePosition
+                                    - static_cast<std::uint64_t>(pipelineLatencySamples);
+            const auto targetSequence = targetSample / static_cast<std::uint64_t>(workerFrameSamples);
+            const int targetOffset = static_cast<int>(targetSample
+                                   % static_cast<std::uint64_t>(workerFrameSamples));
+
+            if (targetOffset == 0)
+                loadOutputFrame(targetSequence);
+
+            if (hasActiveOutputFrame && activeOutputFrame.sequence == targetSequence)
+            {
+                wetLeft = activeOutputFrame.samples[static_cast<std::size_t>(targetOffset)];
+                wetRight = numChannels > 1
+                         ? activeOutputFrame.samples[static_cast<std::size_t>(
+                               RealtimeMP3Worker::maxFrameSamples + targetOffset)]
+                         : wetLeft;
+            }
+            else
+            {
+                // A late worker frame must not shift the stream. Use the
+                // latency-aligned dry signal for this frame and discard stale
+                // worker output at the next frame boundary.
+                wetLeft = dryBuffer.getSample(0, sample);
+                wetRight = numChannels > 1 ? dryBuffer.getSample(1, sample) : wetLeft;
+            }
+        }
+
+        if (processReal)
+        {
+            leftChannel[sample] = sanitizeAudioSample(wetLeft);
+            if (rightChannel != nullptr)
+                rightChannel[sample] = sanitizeAudioSample(wetRight);
+        }
+
+        if (totalLatencySamples > 0)
+            dryDelayPosition = (dryDelayPosition + 1) % totalLatencySamples;
+        streamSamplePosition++;
     }
 
-    simCodec.process(leftChannel, rightChannel, numSamples);
-    decodeOk.store(false, std::memory_order_relaxed);
+    if (!processReal)
+    {
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            leftChannel[sample] = dryBuffer.getSample(0, sample);
+            if (rightChannel != nullptr)
+                rightChannel[sample] = dryBuffer.getSample(1, sample);
+        }
+        simCodec.process(leftChannel, rightChannel, numSamples);
+        decodeOk.store(false, std::memory_order_relaxed);
+    }
 
     if (mix < 1.0f)
     {
@@ -227,6 +307,63 @@ void LAMEglitchAudioProcessor::processChunk(float* leftChannel, float* rightChan
                 wet[i] = sanitizeAudioSample(wet[i]);
         }
     }
+}
+
+void LAMEglitchAudioProcessor::submitCompletedInputFrame()
+{
+    const auto sequence = nextInputFrameSequence++;
+    const bool shouldSubmit = inputFrameEligibleForReal
+                           && realModeRequested.load(std::memory_order_relaxed)
+                           && realWorker.isCodecAvailable();
+
+    if (shouldSubmit)
+    {
+        const bool submitted = realWorker.submitFrame(
+            sequence,
+            inputFrame.data(),
+            inputFrame.data() + RealtimeMP3Worker::maxFrameSamples,
+            getTotalNumOutputChannels(),
+            workerParameters);
+
+        if (submitted && isNonRealtime())
+            realWorker.waitUntilOutputAvailable(sequence, 5000);
+    }
+
+    inputFrameFill = 0;
+    inputFrameEligibleForReal = false;
+}
+
+void LAMEglitchAudioProcessor::loadOutputFrame(std::uint64_t sequence) noexcept
+{
+    hasActiveOutputFrame = false;
+
+    for (;;)
+    {
+        if (!hasPendingOutputFrame)
+            hasPendingOutputFrame = realWorker.tryPopOutput(pendingOutputFrame);
+
+        if (!hasPendingOutputFrame)
+            break;
+
+        if (pendingOutputFrame.sequence < sequence)
+        {
+            hasPendingOutputFrame = false;
+            continue;
+        }
+
+        if (pendingOutputFrame.sequence == sequence)
+        {
+            activeOutputFrame = pendingOutputFrame;
+            hasActiveOutputFrame = true;
+            hasPendingOutputFrame = false;
+            decodeOk.store(activeOutputFrame.decodeOk, std::memory_order_relaxed);
+        }
+
+        break;
+    }
+
+    if (!hasActiveOutputFrame)
+        decodeOk.store(false, std::memory_order_relaxed);
 }
 
 //==============================================================================

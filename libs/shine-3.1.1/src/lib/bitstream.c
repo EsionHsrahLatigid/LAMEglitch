@@ -41,6 +41,11 @@ void shine_close_bit_stream(bitstream_t *bs)
  */
 void shine_putbits(bitstream_t *bs, unsigned int val, unsigned int N)
 {
+	/* A zero-width write is a no-op. Without this guard, an empty field can
+	   reach the fast path and shift a 32-bit value by 32, which is undefined. */
+	if (N == 0)
+		return;
+
 #ifdef DEBUG
 	if (N > 32)
 		printf("Cannot write more than 32 bits at a time.\n");
@@ -77,4 +82,3 @@ int shine_get_bits_count(bitstream_t *bs)
 {
 	return bs->data_position * 8 + 32 - bs->cache_bits;
 }
-

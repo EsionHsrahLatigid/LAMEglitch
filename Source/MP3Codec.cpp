@@ -93,7 +93,7 @@ bool MP3Codec::initialize(int sampleRate, int channels, int bitrate)
     
     currentSampleRate = sampleRate;
     currentChannels = channels;
-    currentBitrate = bitrate;
+    processingStats = {};
     
     int samplerateIndex = shine_find_samplerate_index(sampleRate);
     if (samplerateIndex < 0)
@@ -116,6 +116,8 @@ bool MP3Codec::initialize(int sampleRate, int channels, int bitrate)
     shine_set_config_mpeg_defaults(&config.mpeg);
     config.mpeg.mode = channels == 1 ? MONO : STEREO;
     config.mpeg.bitr = targetBitrate;
+    currentBitrate = targetBitrate;
+    processingStats.activeBitrate = targetBitrate;
     
     shineEncoder = shine_initialise(&config);
     codecAvailable = (shineEncoder != nullptr);
@@ -140,11 +142,10 @@ bool MP3Codec::initialize(int sampleRate, int channels, int bitrate)
     outputWritePos = 0;
     outputReadPos = 0;
     mp3AccumSize = 0;
-    lastWetL = 0.0f;
-    lastWetR = 0.0f;
     lastDecodeOk.store(false, std::memory_order_relaxed);
-    consecutiveDecodeFails.store(0, std::memory_order_relaxed);
-    extraLatencySamples = std::max(0, static_cast<int>(sampleRate * 0.01f));
+    // A clean Shine/dr_mp3 stream produces its first decoded PCM during the
+    // second frame-sized call, after one complete buffered frame.
+    latencySamples = samplesPerPass;
     
     initialized = true;
     return codecAvailable;
@@ -224,6 +225,8 @@ bool MP3Codec::processWithCorruption(const float* inputL, const float* inputR,
                 }
                 
                 memcpy(mp3Buffer.data(), encoded, mp3Bytes);
+                processingStats.encodedFrames++;
+                processingStats.encodedBytes += static_cast<uint64_t>(mp3Bytes);
                 if (clampedCorruption > 0.0f)
                     corruptMP3Data(mp3Buffer.data(), mp3Bytes);
                 
@@ -292,6 +295,7 @@ bool MP3Codec::processWithCorruption(const float* inputL, const float* inputR,
         if (samples > 0)
         {
             decodedThisBlock = true;
+            processingStats.decodedFrames++;
             for (int s = 0; s < samples; ++s)
             {
                 int idx = outputWritePos % static_cast<int>(outputBufferL.size());
@@ -318,48 +322,27 @@ bool MP3Codec::processWithCorruption(const float* inputL, const float* inputR,
     
     // === 6. Output samples ===
     int available = outputWritePos - outputReadPos;
-    int effectiveAvailable = available;
-    if (clampedCorruption > 0.0f)
-        effectiveAvailable = std::max(0, available - extraLatencySamples);
     bool decodeOk = decodedThisBlock || available > 0;
     lastDecodeOk.store(decodeOk, std::memory_order_relaxed);
-    if (decodeOk)
-        consecutiveDecodeFails.store(0, std::memory_order_relaxed);
-    else
-        consecutiveDecodeFails.fetch_add(1, std::memory_order_relaxed);
     
     for (int i = 0; i < numSamples; ++i)
     {
         // Use available decoded samples if we have any
-        if (effectiveAvailable > 0)
+        if (available > 0)
         {
             int idx = outputReadPos % static_cast<int>(outputBufferL.size());
-            
-            // Output decoded audio + 220Hz tone to confirm
             outputL[i] = outputBufferL[idx];
             if (outputR)
                 outputR[i] = outputBufferR[idx];
-            lastWetL = outputL[i];
-            lastWetR = outputR ? outputR[i] : outputL[i];
-            
+
             outputReadPos++;
             available--;
-            effectiveAvailable--;
         }
         else
         {
-            if (clampedCorruption <= 0.0f)
-            {
-                outputL[i] = inputL[i];
-                if (outputR)
-                    outputR[i] = inputR ? inputR[i] : inputL[i];
-            }
-            else
-            {
-                outputL[i] = 0.0f;
-                if (outputR)
-                    outputR[i] = 0.0f;
-            }
+            outputL[i] = 0.0f;
+            if (outputR)
+                outputR[i] = 0.0f;
         }
     }
     
@@ -412,18 +395,24 @@ void MP3Codec::corruptMP3Data(uint8_t* data, int size)
         // Bit flip - light touch
         if (roll < bitFlipChance)
         {
+            const auto originalByte = data[i];
             int bitCount = 1 + static_cast<int>(uniformDist(rng) * (1.0f + clampedCorruption * 3.0f));
             for (int bit = 0; bit < bitCount; ++bit)
             {
                 int bitPos = static_cast<int>(uniformDist(rng) * 8.0f);
                 data[i] ^= (1 << bitPos);
             }
+            if (data[i] != originalByte)
+                processingStats.bitFlips++;
         }
         
         // Zero byte - creates dropouts
         if (roll < byteDropChance)
         {
+            const bool changed = data[i] != 0x00;
             data[i] = 0x00;
+            if (changed)
+                processingStats.zeroedBytes++;
         }
         
         // Random byte - harsh digital noise
@@ -435,43 +424,13 @@ void MP3Codec::corruptMP3Data(uint8_t* data, int size)
         // Duplicate previous byte - creates stutter
         if (i > startOffset && roll < repeatChance)
         {
+            const bool changed = data[i] != data[i - 1];
             data[i] = data[i - 1];
+            if (changed)
+                processingStats.repeatedBytes++;
         }
     }
 
-}
-
-//==============================================================================
-// MP3SimulationCodec Implementation
-//==============================================================================
-MP3SimulationCodec::MP3SimulationCodec()
-    : rng(std::random_device{}())
-{
-    frameBuffer.resize(FRAME_SIZE * 2);
-    mdctCoeffs.resize(FRAME_SIZE);
-    windowBuffer.resize(FRAME_SIZE);
-    
-    for (int i = 0; i < FRAME_SIZE; ++i)
-    {
-        windowBuffer[i] = std::sin(M_PI / FRAME_SIZE * (i + 0.5f));
-    }
-}
-
-void MP3SimulationCodec::prepare(double sr, int)
-{
-    sampleRate = sr;
-    reset();
-}
-
-void MP3SimulationCodec::reset()
-{
-    std::fill(frameBuffer.begin(), frameBuffer.end(), 0.0f);
-    framePosition = 0;
-}
-
-void MP3SimulationCodec::setBitrate(int kbps)
-{
-    bitrate = kbps;
 }
 
 void MP3SimulationCodec::process(float* leftChannel, float* rightChannel, int numSamples)
@@ -502,8 +461,3 @@ void MP3SimulationCodec::process(float* leftChannel, float* rightChannel, int nu
             rightChannel[i] = sanitizeAudioSample(R);
     }
 }
-
-void MP3SimulationCodec::simulateMDCT(float*, int) {}
-void MP3SimulationCodec::simulateIMDCT(float*, int) {}
-void MP3SimulationCodec::applyQuantization(float*, int, int) {}
-void MP3SimulationCodec::applyBandLimit(float*, int) {}

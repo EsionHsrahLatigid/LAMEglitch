@@ -8,7 +8,6 @@
 
 #include <vector>
 #include <cstdint>
-#include <memory>
 #include <random>
 #include <atomic>
 
@@ -39,6 +38,17 @@ public:
         size_t outputRight = 0;
     };
 
+    struct ProcessingStats
+    {
+        uint64_t encodedFrames = 0;
+        uint64_t decodedFrames = 0;
+        uint64_t encodedBytes = 0;
+        uint64_t bitFlips = 0;
+        uint64_t zeroedBytes = 0;
+        uint64_t repeatedBytes = 0;
+        int activeBitrate = 0;
+    };
+
     MP3Codec();
     ~MP3Codec();
     
@@ -59,8 +69,12 @@ public:
     
     // Get latency in samples
     int getLatencySamples() const { return latencySamples; }
+    int getSamplesPerPass() const { return samplesPerPass; }
+    int getActiveBitrate() const { return currentBitrate; }
     bool getLastDecodeOk() const { return lastDecodeOk.load(std::memory_order_relaxed); }
     BufferCapacities getBufferCapacities() const;
+    ProcessingStats getProcessingStats() const { return processingStats; }
+    void setRandomSeed(uint32_t seed) { rng.seed(seed); }
     
 private:
     void corruptMP3Data(uint8_t* data, int size);
@@ -87,7 +101,7 @@ private:
     int currentSampleRate = 44100;
     int currentChannels = 2;
     int currentBitrate = 128;
-    int latencySamples = 1152 * 2;
+    int latencySamples = 1152;
     
     // Ring buffer positions
     int inputWritePos = 0;
@@ -109,11 +123,8 @@ private:
     static constexpr int MP3_ACCUM_BUFFER_SIZE = MP3_BUFFER_SIZE * 4;
     static constexpr int OUTPUT_BUFFER_SIZE = MP3_FRAME_SAMPLES * 16;
 
-    float lastWetL = 0.0f;
-    float lastWetR = 0.0f;
     std::atomic<bool> lastDecodeOk{false};
-    std::atomic<int> consecutiveDecodeFails{0};
-    int extraLatencySamples = 0;
+    ProcessingStats processingStats;
 };
 
 //==============================================================================
@@ -122,33 +133,11 @@ private:
 class MP3SimulationCodec
 {
 public:
-    MP3SimulationCodec();
-    
-    void prepare(double sampleRate, int samplesPerBlock);
     void process(float* leftChannel, float* rightChannel, int numSamples);
-    void reset();
-    
     void setCorruptionAmount(float amount) { corruptionAmount = amount; }
-    void setBitrate(int kbps);
-    
+
 private:
-    void simulateMDCT(float* data, int size);
-    void simulateIMDCT(float* data, int size);
-    void applyQuantization(float* data, int size, int bits);
-    void applyBandLimit(float* data, int size);
-    
-    double sampleRate = 44100.0;
-    int bitrate = 128;
     float corruptionAmount = 0.5f;
-    
-    std::vector<float> frameBuffer;
-    std::vector<float> mdctCoeffs;
-    std::vector<float> windowBuffer;
-    int framePosition = 0;
-    
-    std::mt19937 rng;
+    std::mt19937 rng { std::random_device{}() };
     std::uniform_real_distribution<float> uniformDist{0.0f, 1.0f};
-    std::normal_distribution<float> normalDist{0.0f, 1.0f};
-    
-    static constexpr int FRAME_SIZE = 576;
 };

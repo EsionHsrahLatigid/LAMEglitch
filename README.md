@@ -2,10 +2,13 @@
 
 Realtime MP3 encode/decode corruption effect for VST3, AU, and Standalone hosts.
 
-LAMEglitch contains the bundled Shine encoder and dr_mp3 decoder, but the
-realtime audio callback is constrained to the deterministic simulation path. The
-real codec can allocate internally, so it is kept out of `processBlock` until a
-bounded worker-thread/offline path is implemented.
+In Real MP3 mode, LAMEglitch sends fixed-size PCM frames through a preallocated
+single-producer/single-consumer queue to a dedicated worker. The worker runs the
+bundled Shine encoder, corrupts the encoded MP3 payload bytes, decodes them with
+dr_mp3, and returns fixed-size wet frames. During realtime playback,
+`processBlock` performs no codec work, blocking wait, or heap allocation.
+Simulation remains an explicit alternate mode
+and an indicated fallback when Shine does not support the host sample rate.
 
 ## Identity
 
@@ -30,7 +33,9 @@ present. The MP3 codec sources are vendored under `libs/`.
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
   -DLAMEGLITCH_BUILD_PLUGIN=ON \
   -DLAMEGLITCH_BUILD_TESTS=ON
-cmake --build build/release --target LAMEglitch_Artifacts LAMEglitchSmokeTests --parallel 2
+cmake --build build/release --target LAMEglitch_Artifacts \
+  LAMEglitchSmokeTests LAMEglitchMP3CodecTests \
+  LAMEglitchRealtimeSafetyTests LAMEglitchWorkerTests --parallel 2
 ctest --test-dir build/release --output-on-failure
 ```
 
@@ -50,7 +55,19 @@ Staged products are written to:
 | Frame Repeat | Probability of byte/frame repetition artifacts |
 | Bitrate | MP3 bitrate from 32 to 320 kbps |
 | Mix | Dry/wet balance |
-| Mode | User-facing safe simulation selector; realtime processing remains simulation-only |
+| Mode | Real MP3 worker path or explicit simulation mode |
+
+## Realtime and latency contract
+
+- Shine and dr_mp3 are owned exclusively by the worker thread.
+- Audio callbacks exchange only fixed-capacity frames; queue underruns use the
+  latency-aligned dry signal instead of blocking or shifting late audio.
+- Offline rendering waits for each submitted worker frame so that rendering
+  faster than wall clock does not discard the MP3 effect.
+- The plug-in reports the fixed queue plus MP3 codec latency to the host and
+  applies the same delay in both Real MP3 and Simulation modes.
+- Changing Bitrate reinitializes Shine on the worker; the corruption controls are
+  snapshotted for each encoded frame.
 
 ## Dependency Licenses
 

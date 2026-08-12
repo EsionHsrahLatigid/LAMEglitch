@@ -60,6 +60,8 @@ target_sources(LAMEglitch
         Source/PluginProcessor.h
         Source/MP3Codec.cpp
         Source/MP3Codec.h
+        Source/RealtimeMP3Worker.cpp
+        Source/RealtimeMP3Worker.h
         libs/shine-3.1.1/src/lib/bitstream.c
         libs/shine-3.1.1/src/lib/huffman.c
         libs/shine-3.1.1/src/lib/l3bitstream.c
@@ -157,6 +159,36 @@ if(LAMEGLITCH_BUILD_TESTS)
     target_link_libraries(LAMEglitchSmokeTests PRIVATE LAMEglitch juce::juce_audio_utils)
     add_dependencies(LAMEglitchSmokeTests LAMEglitch_Artifacts)
     add_test(NAME LAMEglitchSmokeTests COMMAND LAMEglitchSmokeTests)
+
+    add_executable(LAMEglitchMP3CodecTests Tests/MP3CodecTests.cpp)
+    target_include_directories(LAMEglitchMP3CodecTests
+        PRIVATE
+            Source
+            "${CMAKE_CURRENT_BINARY_DIR}/LAMEglitch_artefacts/JuceLibraryCode"
+            libs/shine-3.1.1/src/lib
+            libs/dr_libs-mp3-0.7.2)
+    target_link_libraries(LAMEglitchMP3CodecTests PRIVATE LAMEglitch juce::juce_audio_utils)
+    add_test(NAME LAMEglitchMP3CodecTests COMMAND LAMEglitchMP3CodecTests)
+
+    add_executable(LAMEglitchRealtimeSafetyTests Tests/RealtimeSafetyTests.cpp)
+    target_include_directories(LAMEglitchRealtimeSafetyTests
+        PRIVATE
+            Source
+            "${CMAKE_CURRENT_BINARY_DIR}/LAMEglitch_artefacts/JuceLibraryCode"
+            libs/shine-3.1.1/src/lib
+            libs/dr_libs-mp3-0.7.2)
+    target_link_libraries(LAMEglitchRealtimeSafetyTests PRIVATE LAMEglitch juce::juce_audio_utils)
+    add_test(NAME LAMEglitchRealtimeSafetyTests COMMAND LAMEglitchRealtimeSafetyTests)
+
+    add_executable(LAMEglitchWorkerTests Tests/RealtimeMP3WorkerTests.cpp)
+    target_include_directories(LAMEglitchWorkerTests
+        PRIVATE
+            Source
+            "${CMAKE_CURRENT_BINARY_DIR}/LAMEglitch_artefacts/JuceLibraryCode"
+            libs/shine-3.1.1/src/lib
+            libs/dr_libs-mp3-0.7.2)
+    target_link_libraries(LAMEglitchWorkerTests PRIVATE LAMEglitch juce::juce_audio_utils)
+    add_test(NAME LAMEglitchWorkerTests COMMAND LAMEglitchWorkerTests)
     add_test(
         NAME LAMEglitchArtifactChecks
         COMMAND ${CMAKE_COMMAND}

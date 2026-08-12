@@ -9,6 +9,10 @@
 
 #include <JuceHeader.h>
 #include "MP3Codec.h"
+#include "RealtimeMP3Worker.h"
+
+#include <array>
+#include <cstdint>
 
 //==============================================================================
 class LAMEglitchAudioProcessor : public juce::AudioProcessor
@@ -51,26 +55,32 @@ public:
 
     juce::AudioProcessorValueTreeState& getAPVTS() { return apvts; }
     
-    bool isCodecAvailable() const { return codecAvailable; }
+    bool isCodecAvailable() const { return realWorker.isCodecAvailable(); }
     bool isDecodeOk() const { return decodeOk.load(std::memory_order_relaxed); }
-    bool isUsingRealtimeCodec() const { return useRealCodec; }
+    bool isUsingRealtimeCodec() const { return useRealCodec.load(std::memory_order_relaxed); }
+    bool isRealModeRequested() const { return realModeRequested.load(std::memory_order_relaxed); }
+    RealtimeMP3Worker::Statistics getRealCodecStatistics() const { return realWorker.getStatistics(); }
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void updateParameters();
     void processChunk(float* leftChannel, float* rightChannel, int numChannels, int numSamples);
+    void submitCompletedInputFrame();
+    void loadOutputFrame(std::uint64_t sequence) noexcept;
     
     juce::AudioProcessorValueTreeState apvts;
     
-    // Real MP3 codec (when Shine is available)
-    MP3Codec mp3Codec;
+    // Shine/dr_mp3 live exclusively on this worker. The audio callback only
+    // exchanges fixed-size frames through its SPSC queues.
+    RealtimeMP3Worker realWorker;
     
     // Fallback simulation codec
     MP3SimulationCodec simCodec;
     
-    bool codecAvailable = false;
-    bool useRealCodec = true;
+    std::atomic<bool> realModeRequested { true };
+    std::atomic<bool> useRealCodec { false };
     std::atomic<bool> decodeOk{false};
+    RealtimeMP3Worker::Parameters workerParameters;
     
     // Parameters
     std::atomic<float>* corruptionParam = nullptr;
@@ -81,9 +91,26 @@ private:
     std::atomic<float>* mixParam = nullptr;
     std::atomic<float>* modeParam = nullptr;
     
-    // Dry buffer for mix
+    std::array<float, RealtimeMP3Worker::maxChannels * RealtimeMP3Worker::maxFrameSamples>
+        inputFrame {};
+    int inputFrameFill = 0;
+    bool inputFrameEligibleForReal = false;
+    int workerFrameSamples = RealtimeMP3Worker::maxFrameSamples;
+    std::uint64_t nextInputFrameSequence = 0;
+
+    RealtimeMP3Worker::OutputFrame pendingOutputFrame;
+    RealtimeMP3Worker::OutputFrame activeOutputFrame;
+    bool hasPendingOutputFrame = false;
+    bool hasActiveOutputFrame = false;
+
+    // Audio-thread-owned delay and mix storage.
     juce::AudioBuffer<float> dryBuffer;
+    juce::AudioBuffer<float> dryDelayBuffer;
     int dryBufferCapacity = 0;
+    int dryDelayPosition = 0;
+    int pipelineLatencySamples = 0;
+    int totalLatencySamples = 0;
+    std::uint64_t streamSamplePosition = 0;
 
     static constexpr int maxRealtimeBlockSize = 8192;
     

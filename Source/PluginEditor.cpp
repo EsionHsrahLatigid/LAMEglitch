@@ -67,22 +67,15 @@ LAMEglitchAudioProcessorEditor::LAMEglitchAudioProcessorEditor(LAMEglitchAudioPr
     addAndMakeVisible(bitrateSlider);
     addAndMakeVisible(mixSlider);
     
-    // Mode button - connect to parameter
-    modeButton.setButtonText(p.isCodecAvailable() ? "SAFE SIM" : "SIMULATION");
+    // Mode is attached directly to APVTS: off = real MP3 worker, on = simulation.
+    modeButton.setButtonText("REAL MP3");
     modeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff333344));
     modeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffff3366));
     modeButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff00ffcc));
     modeButton.setColour(juce::TextButton::textColourOnId, juce::Colour(0xffffffff));
     modeButton.setClickingTogglesState(true);
-    modeButton.onClick = [this]() {
-        bool simMode = modeButton.getToggleState();
-        modeButton.setButtonText(simMode ? "SIMULATION" : "SAFE SIM");
-        // Update the parameter
-        if (auto* param = audioProcessor.getAPVTS().getParameter("mode"))
-        {
-            param->setValueNotifyingHost(simMode ? 1.0f : 0.0f);
-        }
-    };
+    modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        p.getAPVTS(), "mode", modeButton);
     addAndMakeVisible(modeButton);
     
     // Status label
@@ -92,7 +85,7 @@ LAMEglitchAudioProcessorEditor::LAMEglitchAudioProcessorEditor(LAMEglitchAudioPr
     
     if (p.isCodecAvailable())
     {
-        statusLabel.setText("Shine encoder ready - realtime callback uses safe simulation",
+        statusLabel.setText("Shine encoder ready - worker-isolated real MP3",
                            juce::dontSendNotification);
     }
     else
@@ -166,8 +159,28 @@ void LAMEglitchAudioProcessorEditor::timerCallback()
         }
     }
 
-    if (audioProcessor.isDecodeOk())
+    const bool realRequested = audioProcessor.isRealModeRequested();
+    modeButton.setButtonText(realRequested ? "REAL MP3" : "SIMULATION");
+
+    if (!realRequested)
     {
+        statusLabel.setText("Simulation mode", juce::dontSendNotification);
+        statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff666677));
+        decodeStatusLabel.setText("DECODE STATUS: SIM", juce::dontSendNotification);
+        decodeStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff777777));
+    }
+    else if (!audioProcessor.isCodecAvailable())
+    {
+        statusLabel.setText("MP3 encoder unavailable - simulation fallback",
+                            juce::dontSendNotification);
+        statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff6666));
+        decodeStatusLabel.setText("DECODE STATUS: UNAVAILABLE", juce::dontSendNotification);
+        decodeStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff3355));
+    }
+    else if (audioProcessor.isDecodeOk())
+    {
+        statusLabel.setText("Real MP3 worker active", juce::dontSendNotification);
+        statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff666677));
         decodeStatusLabel.setText("DECODE STATUS: OK", juce::dontSendNotification);
         decodeStatusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff33ff77));
     }
@@ -220,7 +233,7 @@ void LAMEglitchAudioProcessorEditor::paint(juce::Graphics& g)
     // Subtitle
     g.setFont(juce::Font(11.0f));
     g.setColour(juce::Colour(0xff00ffcc));
-    g.drawText("REALTIME-SAFE MP3 CORRUPTION", 10, 42, 280, 15, juce::Justification::left);
+    g.drawText("WORKER-ISOLATED MP3 CORRUPTION", 10, 42, 300, 15, juce::Justification::left);
     
     // Waveform visualizer area
     juce::Rectangle<float> waveBounds(10.0f, 60.0f, getWidth() - 20.0f, 50.0f);

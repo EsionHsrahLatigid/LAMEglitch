@@ -6,16 +6,6 @@
 
 namespace
 {
-bool operator==(const MP3Codec::BufferCapacities& lhs, const MP3Codec::BufferCapacities& rhs)
-{
-    return lhs.mp3 == rhs.mp3
-        && lhs.mp3Accum == rhs.mp3Accum
-        && lhs.inputLeft == rhs.inputLeft
-        && lhs.inputRight == rhs.inputRight
-        && lhs.outputLeft == rhs.outputLeft
-        && lhs.outputRight == rhs.outputRight;
-}
-
 bool bufferIsFinite(const juce::AudioBuffer<float>& buffer)
 {
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
@@ -30,10 +20,15 @@ bool bufferIsFinite(const juce::AudioBuffer<float>& buffer)
     return true;
 }
 
-void setParameter(juce::AudioProcessorValueTreeState& apvts, const juce::String& id, float normalizedValue)
+bool setParameter(juce::AudioProcessorValueTreeState& apvts, const juce::String& id, float normalizedValue)
 {
     if (auto* parameter = apvts.getParameter(id))
+    {
         parameter->setValueNotifyingHost(normalizedValue);
+        return true;
+    }
+
+    return false;
 }
 
 bool runBlock(LAMEglitchAudioProcessor& processor, int channels, int samples, float scale)
@@ -56,14 +51,25 @@ bool runBlock(LAMEglitchAudioProcessor& processor, int channels, int samples, fl
 int main()
 {
     LAMEglitchAudioProcessor processor;
-    setParameter(processor.getAPVTS(), "mode", 1.0f);
-    setParameter(processor.getAPVTS(), "corruption", 1.0f);
-    setParameter(processor.getAPVTS(), "bitFlip", 1.0f);
-    setParameter(processor.getAPVTS(), "byteDrop", 1.0f);
-    setParameter(processor.getAPVTS(), "frameRepeat", 1.0f);
-    setParameter(processor.getAPVTS(), "mix", 0.5f);
+    processor.setNonRealtime(true);
+    if (!setParameter(processor.getAPVTS(), "mode", 1.0f)
+        || !setParameter(processor.getAPVTS(), "corruption", 1.0f)
+        || !setParameter(processor.getAPVTS(), "bitFlip", 1.0f)
+        || !setParameter(processor.getAPVTS(), "byteDrop", 1.0f)
+        || !setParameter(processor.getAPVTS(), "frameRepeat", 1.0f)
+        || !setParameter(processor.getAPVTS(), "mix", 0.5f))
+    {
+        std::cerr << "LAMEglitch is missing an expected parameter\n";
+        return 1;
+    }
 
     processor.prepareToPlay(44100.0, 128);
+
+    if (processor.getLatencySamples() <= 0)
+    {
+        std::cerr << "LAMEglitch did not report worker/codec latency\n";
+        return 1;
+    }
 
     for (int samples : { 1, 64, 128, 257, 1024, 9000 })
     {
@@ -100,9 +106,65 @@ int main()
     }
 
     setParameter(processor.getAPVTS(), "mode", 0.0f);
-    if (!runBlock(processor, 2, 128, 0.25f) || processor.isUsingRealtimeCodec())
+    setParameter(processor.getAPVTS(), "corruption", 0.0f);
+    setParameter(processor.getAPVTS(), "bitFlip", 0.0f);
+    setParameter(processor.getAPVTS(), "byteDrop", 0.0f);
+    setParameter(processor.getAPVTS(), "frameRepeat", 0.0f);
+    setParameter(processor.getAPVTS(), "mix", 1.0f);
+
+    for (int samples : { 1, 64, 128, 257, 1024, 8192, 9000 })
     {
-        std::cerr << "LAMEglitch real mode was not constrained to realtime-safe simulation\n";
+        if (!runBlock(processor, 2, samples, 0.25f))
+        {
+            std::cerr << "LAMEglitch real MP3 variable block emitted non-finite output\n";
+            return 1;
+        }
+    }
+
+    for (int block = 0; block < 32; ++block)
+        runBlock(processor, 2, 128, 0.25f);
+
+    const auto realStats = processor.getRealCodecStatistics();
+    if (!processor.isUsingRealtimeCodec()
+        || realStats.submittedFrames == 0
+        || realStats.processedFrames == 0
+        || realStats.encodedFrames == 0
+        || realStats.decodedFrames == 0
+        || realStats.encodedBytes == 0)
+    {
+        std::cerr << "LAMEglitch real mode did not encode and decode actual MP3 frames\n";
+        return 1;
+    }
+
+    setParameter(processor.getAPVTS(), "bitrate", 1.0f);
+    for (int block = 0; block < 20; ++block)
+        runBlock(processor, 2, 128, 0.25f);
+    const auto highBitrateStats = processor.getRealCodecStatistics();
+    if (highBitrateStats.activeBitrate != 320
+        || highBitrateStats.encodedFrames == 0
+        || highBitrateStats.encodedBytes == 0)
+    {
+        std::cerr << "LAMEglitch Bitrate did not encode with the reconfigured Shine encoder\n";
+        return 1;
+    }
+
+    const auto submissionsBeforeSimulation = highBitrateStats.submittedFrames;
+    setParameter(processor.getAPVTS(), "mode", 1.0f);
+    for (int block = 0; block < 20; ++block)
+        runBlock(processor, 2, 128, 0.25f);
+    if (processor.isUsingRealtimeCodec()
+        || processor.getRealCodecStatistics().submittedFrames != submissionsBeforeSimulation)
+    {
+        std::cerr << "LAMEglitch simulation mode still submitted real MP3 work\n";
+        return 1;
+    }
+
+    setParameter(processor.getAPVTS(), "mode", 0.0f);
+    for (int block = 0; block < 20; ++block)
+        runBlock(processor, 2, 128, 0.25f);
+    if (processor.getRealCodecStatistics().submittedFrames <= submissionsBeforeSimulation)
+    {
+        std::cerr << "LAMEglitch did not resume real MP3 work after a mode switch\n";
         return 1;
     }
 
@@ -110,6 +172,7 @@ int main()
     processor.getStateInformation(state);
 
     LAMEglitchAudioProcessor restored;
+    restored.setNonRealtime(true);
     restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
     restored.prepareToPlay(48000.0, 64);
 
@@ -119,33 +182,51 @@ int main()
         return 1;
     }
 
-    MP3Codec codec;
-    if (codec.initialize(44100, 2, 128))
+    LAMEglitchAudioProcessor monoProcessor;
+    monoProcessor.setNonRealtime(true);
+    juce::AudioProcessor::BusesLayout monoLayout;
+    monoLayout.inputBuses.add(juce::AudioChannelSet::mono());
+    monoLayout.outputBuses.add(juce::AudioChannelSet::mono());
+    if (!monoProcessor.setBusesLayout(monoLayout))
     {
-        auto before = codec.getBufferCapacities();
-        float left[128] {};
-        float right[128] {};
+        std::cerr << "LAMEglitch rejected its declared mono layout\n";
+        return 1;
+    }
+    setParameter(monoProcessor.getAPVTS(), "mode", 0.0f);
+    setParameter(monoProcessor.getAPVTS(), "corruption", 0.0f);
+    monoProcessor.prepareToPlay(44100.0, 128);
+    for (int block = 0; block < 64; ++block)
+        runBlock(monoProcessor, 1, 128, 0.25f);
+    const auto monoStats = monoProcessor.getRealCodecStatistics();
+    if (monoStats.encodedFrames == 0 || monoStats.decodedFrames == 0)
+    {
+        std::cerr << "LAMEglitch mono mode did not encode and decode real MP3 frames\n";
+        return 1;
+    }
 
-        for (int block = 0; block < 64; ++block)
+    LAMEglitchAudioProcessor fallbackProcessor;
+    fallbackProcessor.setNonRealtime(true);
+    setParameter(fallbackProcessor.getAPVTS(), "mode", 0.0f);
+    fallbackProcessor.prepareToPlay(96000.0, 128);
+    for (int block = 0; block < 16; ++block)
+    {
+        if (!runBlock(fallbackProcessor, 2, 128, 0.25f))
         {
-            for (int sample = 0; sample < 128; ++sample)
-            {
-                left[sample] = std::sin(static_cast<float>(sample + block) * 0.02f) * 0.2f;
-                right[sample] = -left[sample];
-            }
-
-            codec.processWithCorruption(left, right, left, right, 128);
-        }
-
-        auto after = codec.getBufferCapacities();
-        if (!(before == after))
-        {
-            std::cerr << "MP3Codec buffer capacities changed during processing\n";
+            std::cerr << "LAMEglitch unsupported-rate fallback emitted non-finite output\n";
             return 1;
         }
+    }
+    if (fallbackProcessor.isCodecAvailable()
+        || fallbackProcessor.isUsingRealtimeCodec()
+        || fallbackProcessor.getRealCodecStatistics().submittedFrames != 0)
+    {
+        std::cerr << "LAMEglitch unsupported-rate fallback submitted real MP3 work\n";
+        return 1;
     }
 
     processor.releaseResources();
     restored.releaseResources();
+    monoProcessor.releaseResources();
+    fallbackProcessor.releaseResources();
     return 0;
 }

@@ -55,7 +55,9 @@ void shine_window_filter_subband(int16_t **buffer, int32_t s[SBLIMIT], int ch, s
 
   /* replace 32 oldest samples with 32 new samples */
   for (i=32;i--;) {
-    config->subband.x[ch][i+config->subband.off[ch]] = ((int32_t)*ptr) << 16;
+    /* Multiplication is defined for negative PCM values; left-shifting a
+       negative signed integer is undefined behavior in C. */
+    config->subband.x[ch][i+config->subband.off[ch]] = ((int32_t)*ptr) * 65536;
     ptr += stride;
   }
   *buffer = ptr;
