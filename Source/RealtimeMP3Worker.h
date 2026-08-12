@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 class RealtimeMP3Worker final : private juce::Thread
 {
@@ -83,6 +84,11 @@ private:
     class FrameQueue
     {
     public:
+        FrameQueue()
+            : frames(std::make_unique<Storage>())
+        {
+        }
+
         bool push(const Frame& frame) noexcept
         {
             int start1 = 0;
@@ -93,7 +99,7 @@ private:
             if (size1 == 0)
                 return false;
 
-            frames[static_cast<std::size_t>(start1)] = frame;
+            (*frames)[static_cast<std::size_t>(start1)] = frame;
             fifo.finishedWrite(1);
             return true;
         }
@@ -108,7 +114,7 @@ private:
             if (size1 == 0)
                 return false;
 
-            frame = frames[static_cast<std::size_t>(start1)];
+            frame = (*frames)[static_cast<std::size_t>(start1)];
             fifo.finishedRead(1);
             return true;
         }
@@ -116,7 +122,9 @@ private:
         void reset() noexcept { fifo.reset(); }
 
     private:
-        std::array<Frame, capacity> frames {};
+        using Storage = std::array<Frame, capacity>;
+
+        std::unique_ptr<Storage> frames;
         juce::AbstractFifo fifo { capacity };
     };
 
