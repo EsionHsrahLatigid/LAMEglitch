@@ -68,6 +68,25 @@ void* operator new[](std::size_t size, std::align_val_t alignment)
     return ::operator new(size, alignment);
 }
 
+void* operator new(std::size_t size, std::align_val_t alignment,
+                   const std::nothrow_t&) noexcept
+{
+    try
+    {
+        return ::operator new(size, alignment);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+void* operator new[](std::size_t size, std::align_val_t alignment,
+                     const std::nothrow_t&) noexcept
+{
+    return ::operator new(size, alignment, std::nothrow);
+}
+
 void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete[](void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
@@ -79,11 +98,15 @@ void operator delete(void* memory, std::align_val_t) noexcept { _aligned_free(me
 void operator delete[](void* memory, std::align_val_t) noexcept { _aligned_free(memory); }
 void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { _aligned_free(memory); }
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { _aligned_free(memory); }
+void operator delete(void* memory, std::align_val_t, const std::nothrow_t&) noexcept { _aligned_free(memory); }
+void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept { _aligned_free(memory); }
 #else
 void operator delete(void* memory, std::align_val_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::align_val_t) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
+void operator delete(void* memory, std::align_val_t, const std::nothrow_t&) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::align_val_t, const std::nothrow_t&) noexcept { std::free(memory); }
 #endif
 
 namespace
