@@ -1,6 +1,12 @@
 #ifndef PRIV_TYPES_H
 #define PRIV_TYPES_H
 
+#if defined(_MSC_VER)
+#define SHINE_UNUSED
+#else
+#define SHINE_UNUSED __attribute__((unused))
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

@@ -93,7 +93,7 @@ void shine_mdct_sub(shine_global_config *config, int stride)
         for(k=18; k--; )
         {
           int32_t vm;
-          uint32_t vm_lo __attribute__((unused));
+          uint32_t vm_lo SHINE_UNUSED;
 
           mul0(vm, vm_lo, mdct_in[35], config->mdct.cos_l[k][35]);
           for(j=35; j; j-=7) {
