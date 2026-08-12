@@ -6,6 +6,10 @@
 #include <iostream>
 #include <new>
 
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
 namespace
 {
 thread_local bool countAllocations = false;
@@ -48,9 +52,14 @@ void* operator new(std::size_t size, std::align_val_t alignment)
     if (countAllocations)
         audioThreadAllocations.fetch_add(1, std::memory_order_relaxed);
 
+#if defined(_MSC_VER)
+    if (void* memory = _aligned_malloc(size, static_cast<std::size_t>(alignment)))
+        return memory;
+#else
     void* memory = nullptr;
     if (posix_memalign(&memory, static_cast<std::size_t>(alignment), size) == 0)
         return memory;
+#endif
     throw std::bad_alloc();
 }
 
@@ -65,10 +74,17 @@ void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete(void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
 void operator delete[](void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
+#if defined(_MSC_VER)
+void operator delete(void* memory, std::align_val_t) noexcept { _aligned_free(memory); }
+void operator delete[](void* memory, std::align_val_t) noexcept { _aligned_free(memory); }
+void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { _aligned_free(memory); }
+void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { _aligned_free(memory); }
+#else
 void operator delete(void* memory, std::align_val_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::align_val_t) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t, std::align_val_t) noexcept { std::free(memory); }
+#endif
 
 namespace
 {
