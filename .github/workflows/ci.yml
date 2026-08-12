@@ -21,6 +21,9 @@ jobs:
       build-targets: >-
         LAMEglitch_Artifacts
         LAMEglitchSmokeTests
+        LAMEglitchMP3CodecTests
+        LAMEglitchRealtimeSafetyTests
+        LAMEglitchWorkerTests
       artifact-name: LAMEglitch-macOS
       artifact-path: |
         artifacts/Release/VST3/
