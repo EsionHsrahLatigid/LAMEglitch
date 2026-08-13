@@ -33,17 +33,32 @@ present. The MP3 codec sources are vendored under `libs/`.
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
   -DLAMEGLITCH_BUILD_PLUGIN=ON \
   -DLAMEGLITCH_BUILD_TESTS=ON
-cmake --build build/release --target LAMEglitch_Artifacts \
+cmake --build build/release --target ehl_stage_products \
   LAMEglitchSmokeTests LAMEglitchMP3CodecTests \
   LAMEglitchRealtimeSafetyTests LAMEglitchWorkerTests --parallel 2
 ctest --test-dir build/release --output-on-failure
 ```
 
-Staged products are written to:
+Release products are staged by `ehl_stage_products` under:
 
-- `artifacts/Release/VST3/LAMEglitch.vst3`
-- `artifacts/Release/AU/LAMEglitch.component` on macOS
-- `artifacts/Release/Standalone/LAMEglitch.app` on macOS
+```text
+artifacts/plugin-release/macos-arm64/standalone/lameglitch_standalone_plugin.app
+artifacts/plugin-release/macos-arm64/vst3/lameglitch_vst3_plugin.vst3
+artifacts/plugin-release/macos-arm64/au/lameglitch_au_plugin.component
+artifacts/plugin-release/macos-arm64/ARTIFACTS.txt
+artifacts/plugin-release/windows-x64/standalone/lameglitch_standalone_plugin.exe
+artifacts/plugin-release/windows-x64/vst3/lameglitch_vst3_plugin.vst3
+artifacts/plugin-release/windows-x64/ARTIFACTS.txt
+```
+
+On local macOS builds outside CI, VST3 and AU formats are also copied to the
+current user's standard plug-in folders:
+
+- `~/Library/Audio/Plug-Ins/VST3/LAMEglitch.vst3`
+- `~/Library/Audio/Plug-Ins/Components/LAMEglitch.component`
+
+Standalone remains in the artifact tree. CI and non-macOS builds do not copy by
+default. Override with `-DEHL_COPY_PLUGIN_AFTER_BUILD=ON` or `OFF`.
 
 ## Parameters
 
